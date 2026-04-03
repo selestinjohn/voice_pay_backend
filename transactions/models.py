@@ -1,4 +1,3 @@
-
 from django.db import models
 
 
@@ -20,7 +19,6 @@ class Transaction(models.Model):
     status = models.CharField(max_length=20, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # ClickPesa fields
     clickpesa_order_reference = models.CharField(max_length=100, null=True, blank=True)
     clickpesa_status = models.CharField(max_length=50, null=True, blank=True)
     clickpesa_response = models.JSONField(null=True, blank=True)
