@@ -6,6 +6,9 @@ from .models import UserProfile, Transaction
 from .clickpesa_service import ClickPesaService
 
 
+# =========================
+# VOICE PARSER
+# =========================
 def parse_command(text):
     text = text.lower().strip()
 
@@ -36,6 +39,9 @@ def parse_command(text):
     }
 
 
+# =========================
+# REGISTER
+# =========================
 @api_view(["POST"])
 def register_user(request):
     name = request.data.get("name")
@@ -43,16 +49,10 @@ def register_user(request):
     passphrase = request.data.get("passphrase")
 
     if not name or not phone or not passphrase:
-        return Response(
-            {"success": False, "message": "Name, phone, and passphrase are required"},
-            status=400,
-        )
+        return Response({"success": False, "message": "All fields required"}, status=400)
 
     if UserProfile.objects.filter(phone=phone).exists():
-        return Response(
-            {"success": False, "message": "Phone already registered"},
-            status=400,
-        )
+        return Response({"success": False, "message": "Phone already exists"}, status=400)
 
     user = UserProfile.objects.create(
         name=name,
@@ -72,30 +72,24 @@ def register_user(request):
     })
 
 
+# =========================
+# LOGIN
+# =========================
 @api_view(["POST"])
 def login_user(request):
     phone = request.data.get("phone")
     passphrase = request.data.get("passphrase")
 
     if not phone or not passphrase:
-        return Response(
-            {"success": False, "message": "Phone and passphrase are required"},
-            status=400,
-        )
+        return Response({"success": False, "message": "All fields required"}, status=400)
 
     try:
         user = UserProfile.objects.get(phone=phone)
     except UserProfile.DoesNotExist:
-        return Response(
-            {"success": False, "message": "User not found"},
-            status=404,
-        )
+        return Response({"success": False, "message": "User not found"}, status=404)
 
     if user.passphrase != passphrase:
-        return Response(
-            {"success": False, "message": "Invalid passphrase"},
-            status=400,
-        )
+        return Response({"success": False, "message": "Invalid passphrase"}, status=400)
 
     return Response({
         "success": True,
@@ -109,31 +103,31 @@ def login_user(request):
     })
 
 
+# =========================
+# CHECK BALANCE
+# =========================
 @api_view(["POST"])
 def check_balance(request):
     phone = request.data.get("phone")
 
     if not phone:
-        return Response(
-            {"success": False, "message": "Phone required"},
-            status=400,
-        )
+        return Response({"success": False, "message": "Phone required"}, status=400)
 
     try:
         user = UserProfile.objects.get(phone=phone)
     except UserProfile.DoesNotExist:
-        return Response(
-            {"success": False, "message": "User not found"},
-            status=404,
-        )
+        return Response({"success": False, "message": "User not found"}, status=404)
 
     return Response({
         "success": True,
         "balance": user.balance,
-        "message": f"Your balance is {user.balance} shillings",
+        "message": f"Your balance is {user.balance} TZS",
     })
 
 
+# =========================
+# SEND MONEY (CLICKPESA)
+# =========================
 @api_view(["POST"])
 def send_money(request):
     sender_phone = request.data.get("sender_phone")
@@ -141,40 +135,25 @@ def send_money(request):
     amount = request.data.get("amount")
 
     if not all([sender_phone, receiver_phone, amount]):
-        return Response(
-            {"success": False, "message": "All fields required"},
-            status=400,
-        )
+        return Response({"success": False, "message": "All fields required"}, status=400)
 
     try:
         amount = int(amount)
-    except (ValueError, TypeError):
-        return Response(
-            {"success": False, "message": "Invalid amount"},
-            status=400,
-        )
+    except:
+        return Response({"success": False, "message": "Invalid amount"}, status=400)
 
     if amount <= 0:
-        return Response(
-            {"success": False, "message": "Amount must be greater than zero"},
-            status=400,
-        )
+        return Response({"success": False, "message": "Amount must be greater than zero"}, status=400)
 
     try:
         sender = UserProfile.objects.get(phone=sender_phone)
     except UserProfile.DoesNotExist:
-        return Response(
-            {"success": False, "message": "Sender not found"},
-            status=404,
-        )
+        return Response({"success": False, "message": "Sender not found"}, status=404)
 
     if sender.balance < amount:
-        return Response(
-            {"success": False, "message": "Insufficient balance"},
-            status=400,
-        )
+        return Response({"success": False, "message": "Insufficient balance"}, status=400)
 
-    # Convert 0XXXXXXXXX to 255XXXXXXXXX for ClickPesa
+    # Convert number → ClickPesa format
     if receiver_phone.startswith("0") and len(receiver_phone) == 10:
         clickpesa_phone = "255" + receiver_phone[1:]
     else:
@@ -204,9 +183,6 @@ def send_money(request):
             order_reference=order_reference,
         )
 
-        # Do NOT deduct balance here
-        # Wait for webhook SUCCESS before deducting
-
         transaction.status = "processing"
         transaction.clickpesa_status = payout.get("status", "PROCESSING")
         transaction.clickpesa_response = {
@@ -217,23 +193,9 @@ def send_money(request):
 
         return Response({
             "success": True,
-            "message": "Payout initiated successfully",
-            "transaction_id": transaction.id,
+            "message": "Payment initiated",
             "order_reference": order_reference,
-            "clickpesa_status": transaction.clickpesa_status,
         })
-
-    except NotImplementedError as e:
-        transaction.status = "failed"
-        transaction.clickpesa_status = "CHECKSUM_NOT_CONFIGURED"
-        transaction.clickpesa_response = {"error": str(e)}
-        transaction.save()
-
-        return Response({
-            "success": False,
-            "message": str(e),
-            "hint": "Add the exact ClickPesa checksum formula in transactions/clickpesa_service.py",
-        }, status=500)
 
     except Exception as e:
         transaction.status = "failed"
@@ -241,21 +203,18 @@ def send_money(request):
         transaction.clickpesa_response = {"error": str(e)}
         transaction.save()
 
-        return Response({
-            "success": False,
-            "message": f"ClickPesa payout failed: {e}",
-        }, status=400)
+        return Response({"success": False, "message": str(e)}, status=400)
 
 
+# =========================
+# QUERY STATUS
+# =========================
 @api_view(["GET"])
 def query_payout_status(request, order_reference):
     try:
         transaction = Transaction.objects.get(clickpesa_order_reference=order_reference)
     except Transaction.DoesNotExist:
-        return Response(
-            {"success": False, "message": "Transaction not found"},
-            status=404,
-        )
+        return Response({"success": False, "message": "Transaction not found"}, status=404)
 
     try:
         result = ClickPesaService.query_payout_status(order_reference)
@@ -272,143 +231,88 @@ def query_payout_status(request, order_reference):
 
         return Response({
             "success": True,
-            "order_reference": order_reference,
             "status": transaction.clickpesa_status,
-            "raw": result,
+            "data": result,
         })
 
     except Exception as e:
-        return Response({
-            "success": False,
-            "message": f"Failed to query payout status: {e}",
-        }, status=400)
+        return Response({"success": False, "message": str(e)}, status=400)
 
 
+# =========================
+# WEBHOOK (IMPORTANT)
+# =========================
 @api_view(["POST"])
 def clickpesa_webhook(request):
     try:
         data = request.data
-
-        print("ClickPesa Webhook Received:", data)
+        print("Webhook received:", data)
 
         order_reference = data.get("orderReference")
-        payment_status = data.get("status")
+        status = data.get("status")
 
         if not order_reference:
-            return Response(
-                {"success": False, "message": "Missing orderReference"},
-                status=400,
-            )
+            return Response({"success": False, "message": "Missing orderReference"}, status=400)
 
         try:
             transaction = Transaction.objects.get(
                 clickpesa_order_reference=order_reference
             )
         except Transaction.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Transaction not found"},
-                status=404,
-            )
+            return Response({"success": False, "message": "Transaction not found"}, status=404)
 
+        transaction.clickpesa_status = status
         transaction.clickpesa_response = data
-        transaction.clickpesa_status = payment_status or transaction.clickpesa_status
 
-        # Only deduct once
-        if payment_status == "SUCCESS":
+        if status == "SUCCESS":
             if transaction.status != "completed":
-                try:
-                    sender = UserProfile.objects.get(phone=transaction.sender_phone)
+                sender = UserProfile.objects.get(phone=transaction.sender_phone)
 
-                    if sender.balance < transaction.amount:
-                        transaction.status = "failed"
-                        transaction.clickpesa_status = "INSUFFICIENT_BALANCE"
-                        transaction.save()
-
-                        return Response({
-                            "success": False,
-                            "message": "Sender balance is no longer sufficient",
-                        }, status=400)
-
+                if sender.balance >= transaction.amount:
                     sender.balance -= transaction.amount
                     sender.save()
 
                     transaction.status = "completed"
-                    transaction.save()
-
-                except UserProfile.DoesNotExist:
+                else:
                     transaction.status = "failed"
-                    transaction.clickpesa_status = "SENDER_NOT_FOUND"
-                    transaction.save()
 
-                    return Response({
-                        "success": False,
-                        "message": "Sender not found",
-                    }, status=404)
-
-        elif payment_status in ["FAILED", "CANCELLED", "REJECTED"]:
+        elif status in ["FAILED", "CANCELLED", "REJECTED"]:
             transaction.status = "failed"
-            transaction.save()
 
         else:
             transaction.status = "processing"
-            transaction.save()
 
-        return Response({
-            "success": True,
-            "message": "Webhook processed successfully",
-        })
+        transaction.save()
+
+        return Response({"success": True, "message": "Webhook processed"})
 
     except Exception as e:
-        return Response({
-            "success": False,
-            "message": f"Webhook error: {e}",
-        }, status=400)
+        return Response({"success": False, "message": str(e)}, status=400)
 
 
+# =========================
+# VOICE ENTRY POINT
+# =========================
 @api_view(["POST"])
 def process_voice(request):
     text = request.data.get("text")
     user_phone = request.data.get("user_phone")
 
-    if not text:
-        return Response(
-            {"success": False, "message": "No text provided"},
-            status=400,
-        )
+    if not text or not user_phone:
+        return Response({"success": False, "message": "Missing input"}, status=400)
 
-    if not user_phone:
-        return Response(
-            {"success": False, "message": "User phone is required"},
-            status=400,
-        )
+    parsed = parse_command(text)
 
-    parsed_data = parse_command(text)
-
-    if parsed_data.get("action") == "check_balance":
+    if parsed["action"] == "check_balance":
         request._full_data = {"phone": user_phone}
         return check_balance(request)
 
-    if parsed_data.get("action") == "send_money":
-        if not parsed_data.get("amount"):
-            return Response(
-                {"success": False, "message": "Specify amount"},
-                status=400,
-            )
-
-        if not parsed_data.get("phone"):
-            return Response(
-                {"success": False, "message": "Provide phone number"},
-                status=400,
-            )
-
+    if parsed["action"] == "send_money":
         request._full_data = {
             "sender_phone": user_phone,
-            "receiver_phone": parsed_data["phone"],
-            "amount": parsed_data["amount"],
+            "receiver_phone": parsed["phone"],
+            "amount": parsed["amount"],
         }
         return send_money(request)
 
-    return Response({
-        "success": False,
-        "message": "Say send money or check balance",
-    }, status=400)
+    return Response({"success": False, "message": "Command not recognized"}, status=400)
