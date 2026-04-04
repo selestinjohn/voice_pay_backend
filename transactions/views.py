@@ -3,7 +3,6 @@ import uuid
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import UserProfile, Transaction
-from .clickpesa_service import ClickPesaService
 
 
 def parse_command(text):
@@ -136,6 +135,8 @@ def check_balance(request):
 
 @api_view(["POST"])
 def send_money(request):
+    from .clickpesa_service import ClickPesaService
+
     sender_phone = request.data.get("sender_phone")
     receiver_phone = request.data.get("receiver_phone")
     amount = request.data.get("amount")
@@ -233,6 +234,8 @@ def send_money(request):
 
 @api_view(["GET"])
 def query_payout_status(request, order_reference):
+    from .clickpesa_service import ClickPesaService
+
     try:
         transaction = Transaction.objects.get(
             clickpesa_order_reference=order_reference
@@ -277,67 +280,12 @@ def clickpesa_webhook(request):
         return Response({
             "success": True,
             "message": "Webhook route is working"
-        })
+        }, status=200)
 
-    try:
-        data = request.data
-        print("Webhook received:", data)
-
-        order_reference = data.get("orderReference")
-        payment_status = data.get("status")
-
-        if not order_reference:
-            return Response(
-                {"success": False, "message": "Missing orderReference"},
-                status=400,
-            )
-
-        transaction = Transaction.objects.filter(
-            clickpesa_order_reference=order_reference
-        ).first()
-
-        if not transaction:
-            return Response(
-                {"success": False, "message": "Transaction not found"},
-                status=404,
-            )
-
-        transaction.clickpesa_status = payment_status
-        transaction.clickpesa_response = data
-
-        if payment_status == "SUCCESS":
-            if transaction.status != "completed":
-                sender = UserProfile.objects.filter(phone=transaction.sender_phone).first()
-
-                if not sender:
-                    transaction.status = "failed"
-                    transaction.clickpesa_status = "SENDER_NOT_FOUND"
-                elif sender.balance >= transaction.amount:
-                    sender.balance -= transaction.amount
-                    sender.save()
-                    transaction.status = "completed"
-                else:
-                    transaction.status = "failed"
-                    transaction.clickpesa_status = "INSUFFICIENT_BALANCE"
-
-        elif payment_status in ["FAILED", "CANCELLED", "REJECTED"]:
-            transaction.status = "failed"
-        else:
-            transaction.status = "processing"
-
-        transaction.save()
-
-        return Response({
-            "success": True,
-            "message": "Webhook processed"
-        })
-
-    except Exception as e:
-        print("Webhook error:", str(e))
-        return Response(
-            {"success": False, "message": str(e)},
-            status=500,
-        )
+    return Response({
+        "success": True,
+        "message": "POST received"
+    }, status=200)
 
 
 @api_view(["POST"])
