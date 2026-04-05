@@ -5,20 +5,32 @@ from django.conf import settings
 class ClickPesaService:
     @staticmethod
     def get_token():
-        url = f"{settings.CLICKPESA_BASE_URL}/generate-token"
+        base_url = getattr(settings, "CLICKPESA_BASE_URL", None)
+        client_id = getattr(settings, "CLICKPESA_CLIENT_ID", None)
+        api_key = getattr(settings, "CLICKPESA_API_KEY", None)
+
+        if not base_url:
+            raise Exception("CLICKPESA_BASE_URL is missing in settings")
+        if not client_id:
+            raise Exception("CLICKPESA_CLIENT_ID is missing in settings")
+        if not api_key:
+            raise Exception("CLICKPESA_API_KEY is missing in settings")
+
+        url = f"{base_url.rstrip('/')}/generate-token"
 
         response = requests.post(
             url,
             headers={
-                "client-id": settings.CLICKPESA_CLIENT_ID,
-                "api-key": settings.CLICKPESA_API_KEY,
+                "client-id": client_id,
+                "api-key": api_key,
             },
             timeout=30,
         )
         response.raise_for_status()
-        data = response.json()
 
+        data = response.json()
         token = data.get("token")
+
         if not token:
             raise Exception("ClickPesa token not found in response")
 
@@ -26,13 +38,8 @@ class ClickPesaService:
 
     @staticmethod
     def build_checksum(amount, phone_number, currency, order_reference):
-        """
-        TODO:
-        Replace this with the EXACT checksum rule from your ClickPesa account/docs.
-        The public docs we loaded show checksum is required, but not the formula.
-        """
-        raise NotImplementedError(
-            "Add your ClickPesa checksum formula in build_checksum()."
+        raise Exception(
+            "ClickPesa checksum is not configured yet. Add the correct checksum formula in build_checksum()."
         )
 
     @staticmethod
@@ -45,7 +52,7 @@ class ClickPesaService:
             order_reference=order_reference,
         )
 
-        url = f"{settings.CLICKPESA_BASE_URL}/payouts/preview-mobile-money-payout"
+        url = f"{settings.CLICKPESA_BASE_URL.rstrip('/')}/payouts/preview-mobile-money-payout"
 
         payload = {
             "amount": amount,
@@ -58,7 +65,7 @@ class ClickPesaService:
         response = requests.post(
             url,
             headers={
-                "Authorization": token,  # docs show returned token already includes Bearer prefix
+                "Authorization": token,
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -77,7 +84,7 @@ class ClickPesaService:
             order_reference=order_reference,
         )
 
-        url = f"{settings.CLICKPESA_BASE_URL}/payouts/create-mobile-money-payout"
+        url = f"{settings.CLICKPESA_BASE_URL.rstrip('/')}/payouts/create-mobile-money-payout"
 
         payload = {
             "amount": amount,
@@ -90,7 +97,7 @@ class ClickPesaService:
         response = requests.post(
             url,
             headers={
-                "Authorization": token,  # docs show returned token already includes Bearer prefix
+                "Authorization": token,
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -102,7 +109,7 @@ class ClickPesaService:
     @staticmethod
     def query_payout_status(order_reference):
         token = ClickPesaService.get_token()
-        url = f"{settings.CLICKPESA_BASE_URL}/payouts/{order_reference}"
+        url = f"{settings.CLICKPESA_BASE_URL.rstrip('/')}/payouts/{order_reference}"
 
         response = requests.get(
             url,
