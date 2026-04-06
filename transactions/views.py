@@ -135,8 +135,6 @@ def check_balance(request):
 
 @api_view(["POST"])
 def send_money(request):
-    from .clickpesa_service import ClickPesaService
-
     sender_phone = request.data.get("sender_phone")
     receiver_phone = request.data.get("receiver_phone")
     amount = request.data.get("amount")
@@ -192,6 +190,8 @@ def send_money(request):
     )
 
     try:
+        from .clickpesa_service import ClickPesaService
+
         preview = ClickPesaService.preview_mobile_money_payout(
             phone_number=clickpesa_phone,
             amount=amount,
@@ -234,8 +234,6 @@ def send_money(request):
 
 @api_view(["GET"])
 def query_payout_status(request, order_reference):
-    from .clickpesa_service import ClickPesaService
-
     try:
         transaction = Transaction.objects.get(
             clickpesa_order_reference=order_reference
@@ -247,6 +245,8 @@ def query_payout_status(request, order_reference):
         )
 
     try:
+        from .clickpesa_service import ClickPesaService
+
         result = ClickPesaService.query_payout_status(order_reference)
 
         transaction.clickpesa_status = result.get("status", transaction.clickpesa_status)
