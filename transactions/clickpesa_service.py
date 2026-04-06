@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import requests
 from django.conf import settings
 
@@ -38,9 +40,26 @@ class ClickPesaService:
 
     @staticmethod
     def build_checksum(amount, phone_number, currency, order_reference):
-        raise Exception(
-            "ClickPesa checksum is not configured yet. Add the correct checksum formula in build_checksum()."
-        )
+        checksum_enabled = str(
+            getattr(settings, "CLICKPESA_CHECKSUM_ENABLED", "False")
+        ).lower() == "true"
+
+        if not checksum_enabled:
+            return None
+
+        checksum_secret = getattr(settings, "CLICKPESA_CHECKSUM_SECRET", "")
+        if not checksum_secret:
+            raise Exception("CLICKPESA_CHECKSUM_SECRET is missing in settings")
+
+        payload = f"{amount}{phone_number}{currency}{order_reference}"
+
+        checksum = hmac.new(
+            checksum_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        return checksum
 
     @staticmethod
     def preview_mobile_money_payout(phone_number, amount, order_reference, currency="TZS"):
@@ -59,8 +78,10 @@ class ClickPesaService:
             "phoneNumber": phone_number,
             "currency": currency,
             "orderReference": order_reference,
-            "checksum": checksum,
         }
+
+        if checksum:
+            payload["checksum"] = checksum
 
         response = requests.post(
             url,
@@ -91,8 +112,10 @@ class ClickPesaService:
             "phoneNumber": phone_number,
             "currency": currency,
             "orderReference": order_reference,
-            "checksum": checksum,
         }
+
+        if checksum:
+            payload["checksum"] = checksum
 
         response = requests.post(
             url,
