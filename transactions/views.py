@@ -1,8 +1,27 @@
 import re
 import uuid
+import json
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import UserProfile, Transaction
+
+
+def get_request_data(request):
+    try:
+        data = request.data
+        if data:
+            return data
+    except Exception:
+        pass
+
+    try:
+        body = request.body.decode("utf-8")
+        if body:
+            return json.loads(body)
+    except Exception:
+        pass
+
+    return {}
 
 
 def parse_command(text):
@@ -38,13 +57,28 @@ def parse_command(text):
 @api_view(["POST"])
 def register_user(request):
     try:
-        name = request.data.get("name")
-        phone = request.data.get("phone")
-        passphrase = request.data.get("passphrase")
+        data = get_request_data(request)
+
+        name = data.get("name")
+        phone = data.get("phone")
+        passphrase = data.get("passphrase")
 
         if not name or not phone or not passphrase:
+            raw_body = ""
+            try:
+                raw_body = request.body.decode("utf-8")
+            except Exception:
+                raw_body = "could not decode body"
+
             return Response(
-                {"success": False, "message": "All fields are required"},
+                {
+                    "success": False,
+                    "stage": "validation",
+                    "message": "All fields are required",
+                    "received_data": data,
+                    "raw_body": raw_body,
+                    "content_type": getattr(request, "content_type", ""),
+                },
                 status=400,
             )
 
@@ -60,16 +94,20 @@ def register_user(request):
             passphrase=passphrase,
         )
 
-        return Response({
-            "success": True,
-            "message": "Registration successful",
-            "user": {
-                "id": user.id,
-                "name": user.name,
-                "phone": user.phone,
-                "balance": user.balance,
-            }
-        })
+        return Response(
+            {
+                "success": True,
+                "message": "Registration successful",
+                "user": {
+                    "id": user.id,
+                    "name": user.name,
+                    "phone": user.phone,
+                    "balance": user.balance,
+                },
+            },
+            status=200,
+        )
+
     except Exception as e:
         return Response(
             {"success": False, "stage": "register_user", "message": str(e)},
@@ -80,12 +118,19 @@ def register_user(request):
 @api_view(["POST"])
 def login_user(request):
     try:
-        phone = request.data.get("phone")
-        passphrase = request.data.get("passphrase")
+        data = get_request_data(request)
+
+        phone = data.get("phone")
+        passphrase = data.get("passphrase")
 
         if not phone or not passphrase:
             return Response(
-                {"success": False, "message": "All fields are required"},
+                {
+                    "success": False,
+                    "stage": "validation",
+                    "message": "All fields are required",
+                    "received_data": data,
+                },
                 status=400,
             )
 
@@ -103,16 +148,20 @@ def login_user(request):
                 status=400,
             )
 
-        return Response({
-            "success": True,
-            "message": f"Welcome {user.name}",
-            "user": {
-                "id": user.id,
-                "name": user.name,
-                "phone": user.phone,
-                "balance": user.balance,
-            }
-        })
+        return Response(
+            {
+                "success": True,
+                "message": f"Welcome {user.name}",
+                "user": {
+                    "id": user.id,
+                    "name": user.name,
+                    "phone": user.phone,
+                    "balance": user.balance,
+                },
+            },
+            status=200,
+        )
+
     except Exception as e:
         return Response(
             {"success": False, "stage": "login_user", "message": str(e)},
@@ -123,7 +172,8 @@ def login_user(request):
 @api_view(["POST"])
 def check_balance(request):
     try:
-        phone = request.data.get("phone")
+        data = get_request_data(request)
+        phone = data.get("phone")
 
         if not phone:
             return Response(
@@ -139,11 +189,15 @@ def check_balance(request):
                 status=404,
             )
 
-        return Response({
-            "success": True,
-            "balance": user.balance,
-            "message": f"Your balance is {user.balance} TZS",
-        })
+        return Response(
+            {
+                "success": True,
+                "balance": user.balance,
+                "message": f"Your balance is {user.balance} TZS",
+            },
+            status=200,
+        )
+
     except Exception as e:
         return Response(
             {"success": False, "stage": "check_balance", "message": str(e)},
@@ -154,9 +208,11 @@ def check_balance(request):
 @api_view(["POST"])
 def send_money(request):
     try:
-        sender_phone = request.data.get("sender_phone")
-        receiver_phone = request.data.get("receiver_phone")
-        amount = request.data.get("amount")
+        data = get_request_data(request)
+
+        sender_phone = data.get("sender_phone")
+        receiver_phone = data.get("receiver_phone")
+        amount = data.get("amount")
 
         if not all([sender_phone, receiver_phone, amount]):
             return Response(
@@ -164,6 +220,7 @@ def send_money(request):
                     "success": False,
                     "stage": "validation",
                     "message": "All fields are required",
+                    "received_data": data,
                 },
                 status=400,
             )
@@ -375,11 +432,14 @@ def query_payout_status(request, order_reference):
 
         transaction.save()
 
-        return Response({
-            "success": True,
-            "status": transaction.clickpesa_status,
-            "data": result,
-        })
+        return Response(
+            {
+                "success": True,
+                "status": transaction.clickpesa_status,
+                "data": result,
+            },
+            status=200,
+        )
 
     except Exception as e:
         return Response(
@@ -391,13 +451,16 @@ def query_payout_status(request, order_reference):
 @api_view(["GET", "POST"])
 def clickpesa_webhook(request):
     if request.method == "GET":
-        return Response({
-            "success": True,
-            "message": "Webhook route is working"
-        }, status=200)
+        return Response(
+            {
+                "success": True,
+                "message": "Webhook route is working",
+            },
+            status=200,
+        )
 
     try:
-        data = request.data
+        data = get_request_data(request)
         order_reference = data.get("orderReference")
         payment_status = data.get("status")
 
@@ -442,10 +505,13 @@ def clickpesa_webhook(request):
 
         transaction.save()
 
-        return Response({
-            "success": True,
-            "message": "Webhook processed"
-        })
+        return Response(
+            {
+                "success": True,
+                "message": "Webhook processed",
+            },
+            status=200,
+        )
 
     except Exception as e:
         return Response(
@@ -457,8 +523,10 @@ def clickpesa_webhook(request):
 @api_view(["POST"])
 def process_voice(request):
     try:
-        text = request.data.get("text")
-        user_phone = request.data.get("user_phone")
+        data = get_request_data(request)
+
+        text = data.get("text")
+        user_phone = data.get("user_phone")
 
         if not text:
             return Response(
@@ -475,8 +543,13 @@ def process_voice(request):
         parsed = parse_command(text)
 
         if parsed.get("action") == "check_balance":
-            request._full_data = {"phone": user_phone}
-            return check_balance(request)
+            class FakeRequest:
+                pass
+
+            fake_request = FakeRequest()
+            fake_request.data = {"phone": user_phone}
+            fake_request.body = b""
+            return check_balance(fake_request)
 
         if parsed.get("action") == "send_money":
             if not parsed.get("amount"):
@@ -491,12 +564,17 @@ def process_voice(request):
                     status=400,
                 )
 
-            request._full_data = {
+            class FakeRequest:
+                pass
+
+            fake_request = FakeRequest()
+            fake_request.data = {
                 "sender_phone": user_phone,
                 "receiver_phone": parsed["phone"],
                 "amount": parsed["amount"],
             }
-            return send_money(request)
+            fake_request.body = b""
+            return send_money(fake_request)
 
         return Response(
             {"success": False, "message": "Command not recognized"},
