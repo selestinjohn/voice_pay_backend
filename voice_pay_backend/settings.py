@@ -1,22 +1,19 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 import os
 from pathlib import Path
+
 import dj_database_url
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-change-this-in-render")
+SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-change-this-in-production")
 DEBUG = os.getenv("DEBUG", "False") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
-
-CLICKPESA_BASE_URL = os.getenv(
-    "CLICKPESA_BASE_URL",
-    "https://api.clickpesa.com/third-parties"
-)
-CLICKPESA_CLIENT_ID = os.getenv("CLICKPESA_CLIENT_ID", "")
-CLICKPESA_API_KEY = os.getenv("CLICKPESA_API_KEY", "")
-CLICKPESA_CALLBACK_URL = os.getenv("CLICKPESA_CALLBACK_URL", "")
-CLICKPESA_CHECKSUM_ENABLED = os.getenv("CLICKPESA_CHECKSUM_ENABLED", "False")
-CLICKPESA_CHECKSUM_SECRET = os.getenv("CLICKPESA_CHECKSUM_SECRET", "")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -90,6 +87,9 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
@@ -104,8 +104,17 @@ REST_FRAMEWORK = {
     ],
 }
 
+SNIPPE_BASE_URL = os.getenv("SNIPPE_BASE_URL", "https://api.snippe.sh")
+SNIPPE_API_KEY = os.getenv("SNIPPE_API_KEY", "")
+SNIPPE_WEBHOOK_URL = os.getenv("SNIPPE_WEBHOOK_URL", "")
+SNIPPE_WEBHOOK_SECRET = os.getenv("SNIPPE_WEBHOOK_SECRET", "")
+
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = True
+else:
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False

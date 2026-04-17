@@ -1,16 +1,20 @@
+import json
 import re
 import uuid
-import json
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from .models import UserProfile, Transaction
+
+from users.models import UserProfile
+from .models import Transaction
+from .serializers import TransactionSerializer
+from .snippe_service import SnippeService
 
 
 def get_request_data(request):
     try:
-        data = request.data
-        if data:
-            return data
+        if request.data:
+            return request.data
     except Exception:
         pass
 
@@ -37,21 +41,19 @@ def parse_command(text):
         return {"action": "check_balance"}
 
     if "send" in text:
-        action = "send_money"
-    else:
-        action = "unknown"
+        amount_match = re.findall(r"\d+", text)
+        phone_match = re.findall(r"0\d{9}", text)
 
-    amount_match = re.findall(r"\d+", text)
-    amount = int(amount_match[0]) if amount_match else None
+        amount = int(amount_match[0]) if amount_match else None
+        phone = phone_match[0] if phone_match else None
 
-    phone_match = re.findall(r"0\d{9}", text)
-    phone = phone_match[0] if phone_match else None
+        return {
+            "action": "send_money",
+            "amount": amount,
+            "phone": phone,
+        }
 
-    return {
-        "action": action,
-        "amount": amount,
-        "phone": phone,
-    }
+    return {"action": "unknown"}
 
 
 @api_view(["POST"])
@@ -64,21 +66,8 @@ def register_user(request):
         passphrase = data.get("passphrase")
 
         if not name or not phone or not passphrase:
-            raw_body = ""
-            try:
-                raw_body = request.body.decode("utf-8")
-            except Exception:
-                raw_body = "could not decode body"
-
             return Response(
-                {
-                    "success": False,
-                    "stage": "validation",
-                    "message": "All fields are required",
-                    "received_data": data,
-                    "raw_body": raw_body,
-                    "content_type": getattr(request, "content_type", ""),
-                },
+                {"success": False, "message": "Name, phone, and passphrase are required"},
                 status=400,
             )
 
@@ -105,9 +94,8 @@ def register_user(request):
                     "balance": user.balance,
                 },
             },
-            status=200,
+            status=201,
         )
-
     except Exception as e:
         return Response(
             {"success": False, "stage": "register_user", "message": str(e)},
@@ -119,18 +107,12 @@ def register_user(request):
 def login_user(request):
     try:
         data = get_request_data(request)
-
         phone = data.get("phone")
         passphrase = data.get("passphrase")
 
         if not phone or not passphrase:
             return Response(
-                {
-                    "success": False,
-                    "stage": "validation",
-                    "message": "All fields are required",
-                    "received_data": data,
-                },
+                {"success": False, "message": "Phone and passphrase are required"},
                 status=400,
             )
 
@@ -161,7 +143,6 @@ def login_user(request):
             },
             status=200,
         )
-
     except Exception as e:
         return Response(
             {"success": False, "stage": "login_user", "message": str(e)},
@@ -197,325 +178,9 @@ def check_balance(request):
             },
             status=200,
         )
-
     except Exception as e:
         return Response(
             {"success": False, "stage": "check_balance", "message": str(e)},
-            status=500,
-        )
-
-
-@api_view(["POST"])
-def send_money(request):
-    try:
-        data = get_request_data(request)
-
-        sender_phone = data.get("sender_phone")
-        receiver_phone = data.get("receiver_phone")
-        amount = data.get("amount")
-
-        if not all([sender_phone, receiver_phone, amount]):
-            return Response(
-                {
-                    "success": False,
-                    "stage": "validation",
-                    "message": "All fields are required",
-                    "received_data": data,
-                },
-                status=400,
-            )
-
-        try:
-            amount = int(amount)
-        except (ValueError, TypeError):
-            return Response(
-                {
-                    "success": False,
-                    "stage": "validation",
-                    "message": "Invalid amount",
-                },
-                status=400,
-            )
-
-        if amount <= 0:
-            return Response(
-                {
-                    "success": False,
-                    "stage": "validation",
-                    "message": "Amount must be greater than zero",
-                },
-                status=400,
-            )
-
-        try:
-            sender = UserProfile.objects.get(phone=sender_phone)
-        except UserProfile.DoesNotExist:
-            return Response(
-                {
-                    "success": False,
-                    "stage": "sender_lookup",
-                    "message": "Sender not found",
-                },
-                status=404,
-            )
-
-        if sender.balance < amount:
-            return Response(
-                {
-                    "success": False,
-                    "stage": "balance_check",
-                    "message": "Insufficient balance",
-                },
-                status=400,
-            )
-
-        if receiver_phone.startswith("0") and len(receiver_phone) == 10:
-            clickpesa_phone = "255" + receiver_phone[1:]
-        else:
-            clickpesa_phone = receiver_phone
-
-        order_reference = f"VP-{uuid.uuid4().hex[:12].upper()}"
-
-        transaction = Transaction.objects.create(
-            sender_phone=sender_phone,
-            receiver_phone=receiver_phone,
-            amount=amount,
-            action="send_money",
-            status="pending",
-            clickpesa_order_reference=order_reference,
-        )
-
-        try:
-            from .clickpesa_service import ClickPesaService
-        except Exception as e:
-            transaction.status = "failed"
-            transaction.clickpesa_status = "IMPORT_FAILED"
-            transaction.clickpesa_response = {"error": str(e)}
-            transaction.save()
-
-            return Response(
-                {
-                    "success": False,
-                    "stage": "import_clickpesa_service",
-                    "message": str(e),
-                },
-                status=500,
-            )
-
-        try:
-            preview = ClickPesaService.preview_mobile_money_payout(
-                phone_number=clickpesa_phone,
-                amount=amount,
-                order_reference=order_reference,
-            )
-        except Exception as e:
-            transaction.status = "failed"
-            transaction.clickpesa_status = "PREVIEW_FAILED"
-            transaction.clickpesa_response = {"error": str(e)}
-            transaction.save()
-
-            return Response(
-                {
-                    "success": False,
-                    "stage": "preview_mobile_money_payout",
-                    "message": str(e),
-                    "order_reference": order_reference,
-                },
-                status=400,
-            )
-
-        try:
-            payout = ClickPesaService.create_mobile_money_payout(
-                phone_number=clickpesa_phone,
-                amount=amount,
-                order_reference=order_reference,
-            )
-        except Exception as e:
-            transaction.status = "failed"
-            transaction.clickpesa_status = "CREATE_PAYOUT_FAILED"
-            transaction.clickpesa_response = {
-                "preview": preview,
-                "error": str(e),
-            }
-            transaction.save()
-
-            return Response(
-                {
-                    "success": False,
-                    "stage": "create_mobile_money_payout",
-                    "message": str(e),
-                    "order_reference": order_reference,
-                    "preview": preview,
-                },
-                status=400,
-            )
-
-        transaction.status = "processing"
-        transaction.clickpesa_status = payout.get("status", "PROCESSING")
-        transaction.clickpesa_response = {
-            "preview": preview,
-            "payout": payout,
-        }
-        transaction.save()
-
-        return Response(
-            {
-                "success": True,
-                "message": "Payment initiated",
-                "order_reference": order_reference,
-                "transaction_id": transaction.id,
-                "clickpesa_status": transaction.clickpesa_status,
-                "preview": preview,
-                "payout": payout,
-            },
-            status=200,
-        )
-
-    except Exception as e:
-        return Response(
-            {
-                "success": False,
-                "stage": "outer_exception",
-                "message": str(e),
-            },
-            status=500,
-        )
-
-
-@api_view(["GET"])
-def query_payout_status(request, order_reference):
-    try:
-        try:
-            transaction = Transaction.objects.get(
-                clickpesa_order_reference=order_reference
-            )
-        except Transaction.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Transaction not found"},
-                status=404,
-            )
-
-        try:
-            from .clickpesa_service import ClickPesaService
-        except Exception as e:
-            return Response(
-                {
-                    "success": False,
-                    "stage": "import_clickpesa_service",
-                    "message": str(e),
-                },
-                status=500,
-            )
-
-        try:
-            result = ClickPesaService.query_payout_status(order_reference)
-        except Exception as e:
-            return Response(
-                {
-                    "success": False,
-                    "stage": "query_payout_status",
-                    "message": str(e),
-                    "order_reference": order_reference,
-                },
-                status=400,
-            )
-
-        transaction.clickpesa_status = result.get("status", transaction.clickpesa_status)
-        transaction.clickpesa_response = result
-
-        if transaction.clickpesa_status == "SUCCESS":
-            transaction.status = "completed"
-        elif transaction.clickpesa_status in ["FAILED", "CANCELLED", "REJECTED"]:
-            transaction.status = "failed"
-        else:
-            transaction.status = "processing"
-
-        transaction.save()
-
-        return Response(
-            {
-                "success": True,
-                "status": transaction.clickpesa_status,
-                "data": result,
-            },
-            status=200,
-        )
-
-    except Exception as e:
-        return Response(
-            {"success": False, "stage": "query_status_outer_exception", "message": str(e)},
-            status=500,
-        )
-
-
-@api_view(["GET", "POST"])
-def clickpesa_webhook(request):
-    if request.method == "GET":
-        return Response(
-            {
-                "success": True,
-                "message": "Webhook route is working",
-            },
-            status=200,
-        )
-
-    try:
-        data = get_request_data(request)
-        order_reference = data.get("orderReference")
-        payment_status = data.get("status")
-
-        if not order_reference:
-            return Response(
-                {"success": False, "message": "Missing orderReference"},
-                status=400,
-            )
-
-        transaction = Transaction.objects.filter(
-            clickpesa_order_reference=order_reference
-        ).first()
-
-        if not transaction:
-            return Response(
-                {"success": False, "message": "Transaction not found"},
-                status=404,
-            )
-
-        transaction.clickpesa_status = payment_status
-        transaction.clickpesa_response = data
-
-        if payment_status == "SUCCESS":
-            if transaction.status != "completed":
-                sender = UserProfile.objects.filter(phone=transaction.sender_phone).first()
-
-                if not sender:
-                    transaction.status = "failed"
-                    transaction.clickpesa_status = "SENDER_NOT_FOUND"
-                elif sender.balance >= transaction.amount:
-                    sender.balance -= transaction.amount
-                    sender.save()
-                    transaction.status = "completed"
-                else:
-                    transaction.status = "failed"
-                    transaction.clickpesa_status = "INSUFFICIENT_BALANCE"
-
-        elif payment_status in ["FAILED", "CANCELLED", "REJECTED"]:
-            transaction.status = "failed"
-        else:
-            transaction.status = "processing"
-
-        transaction.save()
-
-        return Response(
-            {
-                "success": True,
-                "message": "Webhook processed",
-            },
-            status=200,
-        )
-
-    except Exception as e:
-        return Response(
-            {"success": False, "stage": "clickpesa_webhook", "message": str(e)},
             status=500,
         )
 
@@ -529,60 +194,347 @@ def process_voice(request):
         user_phone = data.get("user_phone")
 
         if not text:
-            return Response(
-                {"success": False, "message": "No text provided"},
-                status=400,
-            )
+            return Response({"success": False, "message": "No text provided"}, status=400)
 
         if not user_phone:
-            return Response(
-                {"success": False, "message": "User phone is required"},
-                status=400,
-            )
+            return Response({"success": False, "message": "User phone is required"}, status=400)
+
+        try:
+            user = UserProfile.objects.get(phone=user_phone)
+        except UserProfile.DoesNotExist:
+            return Response({"success": False, "message": "User not found"}, status=404)
 
         parsed = parse_command(text)
 
-        if parsed.get("action") == "check_balance":
-            class FakeRequest:
-                pass
+        if parsed["action"] == "check_balance":
+            return Response(
+                {
+                    "success": True,
+                    "action": "check_balance",
+                    "balance": user.balance,
+                    "message": f"Your balance is {user.balance} TZS",
+                },
+                status=200,
+            )
 
-            fake_request = FakeRequest()
-            fake_request.data = {"phone": user_phone}
-            fake_request.body = b""
-            return check_balance(fake_request)
-
-        if parsed.get("action") == "send_money":
+        if parsed["action"] == "send_money":
             if not parsed.get("amount"):
-                return Response(
-                    {"success": False, "message": "Specify amount"},
-                    status=400,
-                )
+                return Response({"success": False, "message": "Specify amount"}, status=400)
 
             if not parsed.get("phone"):
                 return Response(
-                    {"success": False, "message": "Provide phone number"},
+                    {"success": False, "message": "Provide recipient phone number"},
                     status=400,
                 )
 
-            class FakeRequest:
-                pass
+            transaction = Transaction.objects.create(
+                sender_phone=user_phone,
+                receiver_phone=parsed["phone"],
+                amount=parsed["amount"],
+                action=Transaction.ACTION_SEND_MONEY,
+                status=Transaction.STATUS_AWAITING_CONFIRMATION,
+                voice_text=text,
+                provider_name="snippe",
+            )
 
-            fake_request = FakeRequest()
-            fake_request.data = {
-                "sender_phone": user_phone,
-                "receiver_phone": parsed["phone"],
-                "amount": parsed["amount"],
-            }
-            fake_request.body = b""
-            return send_money(fake_request)
+            return Response(
+                {
+                    "success": True,
+                    "action": "send_money",
+                    "message": (
+                        f"You want to send {parsed['amount']} TZS to {parsed['phone']}. "
+                        f"Say confirm to continue or cancel to stop."
+                    ),
+                    "transaction_id": transaction.id,
+                    "status": transaction.status,
+                    "transaction": TransactionSerializer(transaction).data,
+                },
+                status=200,
+            )
 
-        return Response(
-            {"success": False, "message": "Command not recognized"},
-            status=400,
-        )
+        if parsed["action"] == "confirm":
+            latest_transaction = (
+                Transaction.objects.filter(
+                    sender_phone=user_phone,
+                    status=Transaction.STATUS_AWAITING_CONFIRMATION,
+                    action=Transaction.ACTION_SEND_MONEY,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+            if not latest_transaction:
+                return Response(
+                    {"success": False, "message": "No pending transaction found to confirm"},
+                    status=404,
+                )
+
+            if not latest_transaction.collection_reference:
+                latest_transaction.collection_reference = f"COL-{uuid.uuid4().hex[:12].upper()}"
+
+            try:
+                collection_response = SnippeService.create_mobile_payment(
+                    phone_number=latest_transaction.sender_phone,
+                    amount=latest_transaction.amount,
+                    customer_name=user.name,
+                    metadata={
+                        "transaction_id": latest_transaction.id,
+                        "sender_phone": latest_transaction.sender_phone,
+                        "recipient_phone": latest_transaction.receiver_phone,
+                        "flow": "wallet_to_wallet_collection",
+                        "collection_reference": latest_transaction.collection_reference,
+                    },
+                )
+
+                collection_data = collection_response.get("data") or {}
+
+                latest_transaction.collection_response = collection_response
+                latest_transaction.collection_status = (
+                    collection_data.get("status")
+                    or collection_response.get("status")
+                    or "pending"
+                )
+                latest_transaction.status = Transaction.STATUS_PAYMENT_PENDING
+                latest_transaction.provider_name = "snippe"
+                latest_transaction.save()
+
+                return Response(
+                    {
+                        "success": True,
+                        "action": "confirm",
+                        "message": (
+                            "Payment request sent successfully. "
+                            "Please check your phone and enter your mobile money PIN to continue."
+                        ),
+                        "transaction_id": latest_transaction.id,
+                        "status": latest_transaction.status,
+                        "collection_reference": latest_transaction.collection_reference,
+                        "collection_status": latest_transaction.collection_status,
+                    },
+                    status=200,
+                )
+            except Exception as e:
+                latest_transaction.status = Transaction.STATUS_FAILED
+                latest_transaction.collection_status = "request_failed"
+                latest_transaction.collection_response = {"error": str(e)}
+                latest_transaction.save()
+
+                return Response(
+                    {
+                        "success": False,
+                        "action": "confirm",
+                        "message": "Failed to initiate payment request",
+                        "transaction_id": latest_transaction.id,
+                        "error": str(e),
+                    },
+                    status=400,
+                )
+
+        if parsed["action"] == "cancel":
+            latest_transaction = (
+                Transaction.objects.filter(
+                    sender_phone=user_phone,
+                    status=Transaction.STATUS_AWAITING_CONFIRMATION,
+                    action=Transaction.ACTION_SEND_MONEY,
+                )
+                .order_by("-created_at")
+                .first()
+            )
+
+            if not latest_transaction:
+                return Response(
+                    {"success": False, "message": "No pending transaction found to cancel"},
+                    status=404,
+                )
+
+            latest_transaction.status = Transaction.STATUS_CANCELLED
+            latest_transaction.save()
+
+            return Response(
+                {
+                    "success": True,
+                    "action": "cancel",
+                    "message": "Transaction cancelled successfully",
+                    "transaction_id": latest_transaction.id,
+                    "status": latest_transaction.status,
+                },
+                status=200,
+            )
+
+        return Response({"success": False, "message": "Command not recognized"}, status=400)
 
     except Exception as e:
         return Response(
             {"success": False, "stage": "process_voice", "message": str(e)},
+            status=500,
+        )
+
+
+@api_view(["GET"])
+def transaction_status(request, transaction_id):
+    try:
+        transaction = Transaction.objects.get(id=transaction_id)
+        return Response(
+            {
+                "success": True,
+                "transaction": TransactionSerializer(transaction).data,
+            },
+            status=200,
+        )
+    except Transaction.DoesNotExist:
+        return Response({"success": False, "message": "Transaction not found"}, status=404)
+    except Exception as e:
+        return Response(
+            {"success": False, "stage": "transaction_status", "message": str(e)},
+            status=500,
+        )
+
+
+@api_view(["POST"])
+def payment_webhook(request):
+    try:
+        raw_body = request.body
+
+        try:
+            signature_is_valid = SnippeService.verify_webhook_signature(
+                raw_body=raw_body,
+                headers=request.headers,
+            )
+        except Exception:
+            signature_is_valid = False
+
+        data = SnippeService.parse_webhook(raw_body)
+        event = SnippeService.extract_event_fields(data)
+
+        event_type = (event.get("event_type") or "").lower()
+        provider_status = (event.get("status") or "").lower()
+        metadata = event.get("metadata") or {}
+
+        if event_type.startswith("payment."):
+            transaction = None
+
+            collection_reference = metadata.get("collection_reference")
+            if collection_reference:
+                transaction = Transaction.objects.filter(
+                    collection_reference=collection_reference
+                ).first()
+
+            if not transaction and metadata.get("transaction_id"):
+                transaction = Transaction.objects.filter(
+                    id=metadata.get("transaction_id")
+                ).first()
+
+            if not transaction:
+                return Response(
+                    {"success": False, "message": "Collection transaction not found"},
+                    status=404,
+                )
+
+            transaction.collection_response = event["raw"]
+            transaction.collection_status = provider_status
+            transaction.provider_name = "snippe"
+
+            if event_type == "payment.completed":
+                transaction.status = Transaction.STATUS_PROCESSING
+                transaction.save()
+
+                if not transaction.payout_reference:
+                    payout_response = SnippeService.create_mobile_payout(
+                        recipient_phone=transaction.receiver_phone,
+                        recipient_name=f"Recipient {transaction.receiver_phone}",
+                        amount=transaction.amount,
+                        narration=f"Voice Pay transfer from {transaction.sender_phone}",
+                        metadata={
+                            "transaction_id": transaction.id,
+                            "sender_phone": transaction.sender_phone,
+                            "recipient_phone": transaction.receiver_phone,
+                            "flow": "wallet_to_wallet_payout",
+                        },
+                    )
+
+                    payout_data = payout_response.get("data") or {}
+                    transaction.payout_reference = (
+                        payout_data.get("reference")
+                        or payout_data.get("external_reference")
+                    )
+                    transaction.payout_status = (
+                        payout_data.get("status")
+                        or payout_response.get("status")
+                        or "pending"
+                    )
+                    transaction.payout_response = payout_response
+                    transaction.save()
+
+            elif event_type in ["payment.failed", "payment.expired", "payment.voided"]:
+                transaction.status = Transaction.STATUS_FAILED
+                transaction.save()
+
+            else:
+                transaction.status = Transaction.STATUS_PAYMENT_PENDING
+                transaction.save()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Payment webhook processed",
+                    "signature_valid": signature_is_valid,
+                },
+                status=200,
+            )
+
+        if event_type.startswith("payout."):
+            transaction = None
+
+            payout_reference = event.get("reference")
+            if payout_reference:
+                transaction = Transaction.objects.filter(
+                    payout_reference=payout_reference
+                ).first()
+
+            if not transaction and metadata.get("transaction_id"):
+                transaction = Transaction.objects.filter(
+                    id=metadata.get("transaction_id")
+                ).first()
+
+            if not transaction:
+                return Response(
+                    {"success": False, "message": "Payout transaction not found"},
+                    status=404,
+                )
+
+            transaction.payout_response = event["raw"]
+            transaction.payout_status = provider_status
+            transaction.provider_name = "snippe"
+
+            if event_type == "payout.completed":
+                transaction.status = Transaction.STATUS_COMPLETED
+            elif event_type in ["payout.failed", "payout.reversed"]:
+                transaction.status = Transaction.STATUS_FAILED
+            else:
+                transaction.status = Transaction.STATUS_PROCESSING
+
+            transaction.save()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Payout webhook processed",
+                    "signature_valid": signature_is_valid,
+                },
+                status=200,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Unhandled webhook event ignored",
+                "signature_valid": signature_is_valid,
+            },
+            status=200,
+        )
+
+    except Exception as e:
+        return Response(
+            {"success": False, "stage": "payment_webhook", "message": str(e)},
             status=500,
         )

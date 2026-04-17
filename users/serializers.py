@@ -4,4 +4,12 @@ from .models import UserProfile
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
-        fields = ['id', 'name', 'phone', 'balance', 'voice_sample', 'voice_profile_id']
+        fields = [
+            "id",
+            "name",
+            "phone",
+            "balance",
+            "voice_sample",
+            "voice_profile_id",
+            "created_at",
+        ]
