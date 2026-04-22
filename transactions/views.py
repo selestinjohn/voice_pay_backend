@@ -439,31 +439,50 @@ def payment_webhook(request):
                 transaction.save()
 
                 if not transaction.payout_reference:
-                    payout_response = SnippeService.create_mobile_payout(
-                        recipient_phone=transaction.receiver_phone,
-                        recipient_name=f"Recipient {transaction.receiver_phone}",
-                        amount=transaction.amount,
-                        narration=f"Voice Pay transfer from {transaction.sender_phone}",
-                        metadata={
-                            "transaction_id": transaction.id,
-                            "sender_phone": transaction.sender_phone,
-                            "recipient_phone": transaction.receiver_phone,
-                            "flow": "wallet_to_wallet_payout",
-                        },
-                    )
+                    try:
+                        payout_response = SnippeService.create_mobile_payout(
+                            recipient_phone=transaction.receiver_phone,
+                            recipient_name=f"Recipient {transaction.receiver_phone}",
+                            amount=transaction.amount,
+                            narration=f"Voice Pay transfer from {transaction.sender_phone}",
+                            metadata={
+                                "transaction_id": transaction.id,
+                                "sender_phone": transaction.sender_phone,
+                                "recipient_phone": transaction.receiver_phone,
+                                "flow": "wallet_to_wallet_payout",
+                            },
+                        )
 
-                    payout_data = payout_response.get("data") or {}
-                    transaction.payout_reference = (
-                        payout_data.get("reference")
-                        or payout_data.get("external_reference")
-                    )
-                    transaction.payout_status = (
-                        payout_data.get("status")
-                        or payout_response.get("status")
-                        or "pending"
-                    )
-                    transaction.payout_response = payout_response
-                    transaction.save()
+                        payout_data = payout_response.get("data") or {}
+
+                        transaction.payout_reference = (
+                            payout_data.get("reference")
+                            or payout_data.get("external_reference")
+                        )
+                        transaction.payout_status = (
+                            payout_data.get("status")
+                            or payout_response.get("status")
+                            or "pending"
+                        )
+                        transaction.payout_response = payout_response
+                        transaction.save()
+
+                    except Exception as payout_error:
+                        transaction.payout_status = "request_failed"
+                        transaction.payout_response = {
+                            "error": str(payout_error)
+                        }
+                        transaction.status = Transaction.STATUS_FAILED
+                        transaction.save()
+
+                        return Response(
+                            {
+                                "success": False,
+                                "message": "Payout creation failed",
+                                "signature_valid": signature_is_valid,
+                            },
+                            status=500,
+                        )
 
             elif event_type in ["payment.failed", "payment.expired", "payment.voided"]:
                 transaction.status = Transaction.STATUS_FAILED
